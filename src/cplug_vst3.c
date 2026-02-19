@@ -787,13 +787,13 @@ VST3View_onKeyUp(void* const self, const char16_t key_char, const int16_t key_co
 static Steinberg_tresult SMTG_STDMETHODCALLTYPE
 VST3View_getSize(void* const self, struct Steinberg_ViewRect* const rect)
 {
-    cplug_log("VST3View_getSize %p", rect);
-
     uint32_t width, height;
     cplug_getSize(((VST3View*)self)->userGUI, &width, &height);
 
     rect->right  = rect->left + width;
     rect->bottom = rect->top + height;
+
+    cplug_log("VST3View_getSize => %p {%d,%d,%d,%d}", self, rect->top, rect->left, rect->right, rect->bottom);
 
     return Steinberg_kResultOk;
 }
@@ -1441,6 +1441,8 @@ static Steinberg_IPlugView* SMTG_STDMETHODCALLTYPE VST3Controller_createView(voi
     // Steinberg_IPlugViewContentScaleSupport
     view->contentScaleSupport.base.setContentScaleFactor = VST3ViewContentScale_setContentScaleFactor;
     view->contentScaleSupport.refcounter                 = 1;
+
+    view->frame = NULL;
 
     view->userGUI = cplug_createGUI(&vst3->hostContext, vst3->userPlugin);
     CPLUG_LOG_ASSERT(view->userGUI != NULL);
@@ -2486,6 +2488,11 @@ VST3Factory_createInstance(void* self, const Steinberg_TUID class_id, const Stei
         (tuid_match(iid, Steinberg_Vst_IComponent_iid) || tuid_match(iid, Steinberg_FUnknown_iid)))
     {
         VST3Plugin* vst3                 = (VST3Plugin*)calloc(1, sizeof(VST3Plugin));
+
+#if CPLUG_WANT_GUI
+        vst3->view = NULL;
+#endif
+
         vst3->hostContext.type           = CPLUG_PLUGIN_IS_VST3;
         vst3->hostContext.sendParamEvent = _cplug_vst3_sendParamEvent;
         vst3->hostContext.rescan         = _cplug_vst3_rescan;
