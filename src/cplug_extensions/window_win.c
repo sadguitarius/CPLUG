@@ -98,7 +98,7 @@ typedef struct CplugWindow
     PWResizeDirection ResizeDirection;
 
     float content_scale_factor;
-    bool did_change_scale_factor;
+    bool host_did_change_scale_factor;
 
     struct
     {
@@ -792,6 +792,35 @@ void pw_get_screen_size(uint32_t* width, uint32_t* height)
     *height = Rect.bottom - Rect.top;
 }
 
+void PWSetScaleFromDisplay(void *_pw) {
+    CplugWindow *pw = _pw;
+    DPI_AWARENESS awareness = GetAwarenessFromDpiAwarenessContext(GetThreadDpiAwarenessContext());
+    // switch (awareness) {
+    //     case DPI_AWARENESS_INVALID:
+    //         cplug_log("DPI_AWARENESS_INVALID");
+    //         break;
+    //     case DPI_AWARENESS_UNAWARE:
+    //         cplug_log("DPI_AWARENESS_UNAWARE");
+    //         break;
+    //     case DPI_AWARENESS_SYSTEM_AWARE:
+    //         cplug_log("DPI_AWARENESS_SYSTEM_AWARE");
+    //         break;
+    //     case DPI_AWARENESS_PER_MONITOR_AWARE:
+    //         cplug_log("DPI_AWARENESS_PER_MONITOR_AWARE");
+    //         break;
+    //     default:
+    //         break;
+    // }
+
+    if (awareness != DPI_AWARENESS_UNAWARE) {
+        HMONITOR monitor = MonitorFromWindow(pw_get_native_window(pw), MONITOR_DEFAULTTONEAREST);
+        DEVICE_SCALE_FACTOR device_scale_factor;
+        HRESULT hr = GetScaleFactorForMonitor(monitor, &device_scale_factor);
+        PW_ASSERT(hr == S_OK);
+        pw->content_scale_factor = (float)device_scale_factor / 100.0f;
+    }
+}
+
 float pw_get_content_scale_factor(void* _pw)
 {
     // cplug_log("pw_get_content_scale_factor => %p", _pw);
@@ -1212,6 +1241,11 @@ LRESULT CALLBACK PWWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
                     // https://learn.microsoft.com/en-us/windows/win32/api/dxgi/nf-dxgi-idxgiswapchain-resizetarget
                     HRESULT hr = pw->pSwapchain1->lpVtbl->ResizeTarget(pw->pSwapchain1, &pw->ModeDesc);
                     PW_ASSERT(SUCCEEDED(hr));
+                }
+
+                // TODO: test this
+                if (pw->host_ctx->type != CPLUG_PLUGIN_IS_STANDALONE && !pw->host_did_change_scale_factor) {
+                    PWSetScaleFromDisplay(pw);
                 }
             }
         }
@@ -1840,34 +1874,9 @@ void* cplug_createGUI(CplugHostContext* host_ctx, void* userPlugin)
     // Additionally, we need to account for DPI-aware hosts that do not call setContentScaleFactor() such as Reason.
     // Bug to be aware of: https://anukari.com/blog/devlog/lions-tigers-and-high-dpi-oh-my
 
-    DPI_AWARENESS awareness = GetAwarenessFromDpiAwarenessContext(GetThreadDpiAwarenessContext());
-    // switch (awareness) {
-    //     case DPI_AWARENESS_INVALID:
-    //         cplug_log("DPI_AWARENESS_INVALID");
-    //         break;
-    //     case DPI_AWARENESS_UNAWARE:
-    //         cplug_log("DPI_AWARENESS_UNAWARE");
-    //         break;
-    //     case DPI_AWARENESS_SYSTEM_AWARE:
-    //         cplug_log("DPI_AWARENESS_SYSTEM_AWARE");
-    //         break;
-    //     case DPI_AWARENESS_PER_MONITOR_AWARE:
-    //         cplug_log("DPI_AWARENESS_PER_MONITOR_AWARE");
-    //         break;
-    //     default:
-    //         break;
-    // }
-
-    if (awareness != DPI_AWARENESS_UNAWARE) {
-        HMONITOR hMonitor = MonitorFromWindow(pw_get_native_window(pw), MONITOR_DEFAULTTONEAREST);
-        DEVICE_SCALE_FACTOR devScaleFactor;
-        HRESULT res = GetScaleFactorForMonitor(hMonitor, &devScaleFactor);
-        pw->content_scale_factor = (float)devScaleFactor / 100.0f;
-    } else {
-        pw->content_scale_factor = 1.0f;
-    }
-
-    pw->did_change_scale_factor = false;
+    pw->content_scale_factor = 1.0f;
+    pw->host_did_change_scale_factor = false;
+    PWSetScaleFromDisplay(pw);
 
     uint32_t width = (uint32_t)((float)Info.init_size.width * pw->content_scale_factor);
     uint32_t height = (uint32_t)((float)Info.init_size.height * pw->content_scale_factor);
@@ -2225,7 +2234,7 @@ void cplug_setScaleFactor(void* userGUI, float scale)
     // based on the scale factor that the host knows about.
     // We need to reset scaling to 1x on the first call to this function
     // so that the host responds to requestResize properly.
-    if (pw->host_ctx->type != CPLUG_PLUGIN_IS_STANDALONE && !pw->did_change_scale_factor) {
+    if (pw->host_ctx->type != CPLUG_PLUGIN_IS_STANDALONE && !pw->host_did_change_scale_factor) {
         PWGetInfo Info = {.type = PW_INFO_INIT_SIZE, .init_size.plugin = pw->plugin};
         pw_get_info(&Info);
 
@@ -2235,7 +2244,7 @@ void cplug_setScaleFactor(void* userGUI, float scale)
         pw->content_scale_factor = 1.0f;
         cplug_setSize(pw, width, height);
 
-        pw->did_change_scale_factor = true;
+        pw->host_did_change_scale_factor = true;
     }
 
     pw->content_scale_factor = scale;
