@@ -1462,6 +1462,8 @@ static Steinberg_IPlugView* SMTG_STDMETHODCALLTYPE VST3Controller_createView(voi
     view->contentScaleSupport.base.setContentScaleFactor = VST3ViewContentScale_setContentScaleFactor;
     view->contentScaleSupport.refcounter                 = 1;
 
+    view->frame = NULL;
+
     view->userGUI = cplug_createGUI(&vst3->hostContext, vst3->userPlugin);
     CPLUG_LOG_ASSERT(view->userGUI != NULL);
 
@@ -2448,6 +2450,11 @@ VST3Factory_createInstance(void* self, const Steinberg_TUID class_id, const Stei
         (cplug_tuid_match(iid, Steinberg_Vst_IComponent_iid) || cplug_tuid_match(iid, Steinberg_FUnknown_iid)))
     {
         VST3Plugin* vst3                 = (VST3Plugin*)calloc(1, sizeof(VST3Plugin));
+
+        #if CPLUG_WANT_GUI
+            vst3->view = NULL;
+        #endif
+
         vst3->hostContext.type           = CPLUG_PLUGIN_IS_VST3;
         vst3->hostContext.sendParamEvent = _cplug_vst3_sendParamEvent;
         vst3->hostContext.rescan         = _cplug_vst3_rescan;

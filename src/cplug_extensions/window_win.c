@@ -17,6 +17,7 @@
 #define COBJMACROS
 
 #include <Windows.h>
+#include <ShellScalingApi.h>
 
 #include <commdlg.h>
 #include <ole2.h>
@@ -82,6 +83,7 @@ typedef struct CplugWindow
     PWResizeDirection ResizeDirection;
 
     float content_scale_factor;
+    bool host_did_change_scale_factor;
 
     struct
     {
@@ -784,6 +786,19 @@ void pw_get_screen_size(uint32_t* width, uint32_t* height)
     GetWindowRect(Desktop, &Rect);
     *width  = Rect.right - Rect.left;
     *height = Rect.bottom - Rect.top;
+}
+
+void PWSetScaleFromDisplay(void *_pw) {
+    CplugWindow *pw = _pw;
+    DPI_AWARENESS awareness = GetAwarenessFromDpiAwarenessContext(GetThreadDpiAwarenessContext());
+
+    if (awareness != DPI_AWARENESS_UNAWARE) {
+        HMONITOR monitor = MonitorFromWindow(pw_get_native_window(pw), MONITOR_DEFAULTTONEAREST);
+        DEVICE_SCALE_FACTOR device_scale_factor;
+        HRESULT hr = GetScaleFactorForMonitor(monitor, &device_scale_factor);
+        PW_ASSERT(hr == S_OK);
+        pw->content_scale_factor = (float)device_scale_factor / 100.0f;
+    }
 }
 
 float pw_get_content_scale_factor(void* _pw)
@@ -1983,6 +1998,19 @@ void* cplug_createGUI(CplugHostContext* host_ctx, void* userPlugin)
     PW_ASSERT(Info.init_size.width > 0);
     PW_ASSERT(Info.init_size.height > 0);
 
+    // NOTE: Ableton and FL Studio have options to allow users to disable DPI scaling, which causes the DAW to stop
+    // calling cplug_setScaleFactor()
+    // In Ableton this is "Auto scale on", which is on by default and DPI "unaware". Right click on plugin instances
+    // to find this option
+    // In FL Studio, load a plugin, go to the setting in the window wrapper and toggle "DPI aware"
+    // Bug to be aware of: https://anukari.com/blog/devlog/lions-tigers-and-high-dpi-oh-my
+    pw->content_scale_factor = 1.0f;
+    pw->host_did_change_scale_factor = false;
+    PWSetScaleFromDisplay(pw);
+
+    uint32_t width = (uint32_t)((float)Info.init_size.width * pw->content_scale_factor);
+    uint32_t height = (uint32_t)((float)Info.init_size.height * pw->content_scale_factor);
+
     pw->hwnd = CreateWindowExW(
         WS_EX_ACCEPTFILES,
         pw->ClassName,
@@ -1990,8 +2018,8 @@ void* cplug_createGUI(CplugHostContext* host_ctx, void* userPlugin)
         WS_CHILD | WS_CLIPSIBLINGS,
         CW_USEDEFAULT,
         CW_USEDEFAULT,
-        Info.init_size.width,
-        Info.init_size.height,
+        width,
+        height,
         GetDesktopWindow(),
         NULL,
         wc.hInstance,
@@ -2006,14 +2034,6 @@ void* cplug_createGUI(CplugHostContext* host_ctx, void* userPlugin)
         PW_UNIQUE_INT_ID = EpochTimeMs;
     SetWindowLongPtrW(pw->hwnd, GWLP_ID, PW_UNIQUE_INT_ID);
 
-    // NOTE: Ableton and FL Studio have options to allow users to disable DPI scaling, which causes the DAW to stop
-    // calling cplug_setScaleFactor()
-    // In Ableton this is "Auto scale on", which is on by default and DPI "unaware". Right click on plugin instances
-    // to find this option
-    // In FL Studio, load a plugin, go to the setting in the window wrapper and toggle "DPI aware"
-    // Bug to be aware of: https://anukari.com/blog/devlog/lions-tigers-and-high-dpi-oh-my
-    pw->content_scale_factor = 1.0f;
-
     // https://learn.microsoft.com/en-us/windows/win32/api/ole2/nf-ole2-oleinitialize
     // https://learn.microsoft.com/en-us/windows/win32/api/ole2/nf-ole2-registerdragdrop
     HRESULT hr = OleInitialize(NULL);
@@ -2022,8 +2042,8 @@ void* cplug_createGUI(CplugHostContext* host_ctx, void* userPlugin)
     PW_ASSERT(SUCCEEDED(hr));
 
 #ifdef PW_DX11
-    pw->NextWidth  = Info.init_size.width;
-    pw->NextHeight = Info.init_size.height;
+    pw->NextWidth  = width;
+    pw->NextHeight = height;
 
     pw->LastMonitor = MonitorFromWindow(pw->hwnd, MONITOR_DEFAULTTONEAREST);
     if (pw->LastMonitor == NULL)
@@ -2302,6 +2322,24 @@ void cplug_setScaleFactor(void* userGUI, float scale)
 {
     // cplug_log("cplug_setScaleFactor => %p %f", userGUI, scale);
     CplugWindow* pw          = userGUI;
+
+    // Some VST3 hosts such as Cubase make assumptions about the window dimensions
+    // based on the scale factor that the host knows about.
+    // We need to reset scaling to 1x on the first call to this function
+    // so that the host responds to requestResize properly.
+    if (pw->host_ctx->type != CPLUG_PLUGIN_IS_STANDALONE && !pw->host_did_change_scale_factor) {
+        PWGetInfo Info = {.type = PW_INFO_INIT_SIZE, .init_size.plugin = pw->plugin};
+        pw_get_info(&Info);
+
+        uint32_t width = (uint32_t)((float)Info.init_size.width);
+        uint32_t height = (uint32_t)((float)Info.init_size.height);
+
+        pw->content_scale_factor = 1.0f;
+        cplug_setSize(pw, width, height);
+
+        pw->host_did_change_scale_factor = true;
+    }
+
     pw->content_scale_factor = scale;
 
     PWEvent e = {
