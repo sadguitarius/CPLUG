@@ -1148,6 +1148,10 @@ LRESULT CALLBACK PWWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
     {
     case WM_PAINT:
         break;
+    case WM_DPICHANGED:
+        if (pw && pw->gui)
+            cplug_setScaleFactor(pw, (float)HIWORD(wParam) / USER_DEFAULT_SCREEN_DPI);
+        return 0;
     // NOTE: some DAWs will rudely call DestroyWindow on your hwnd before calling cplug_destroyGUI
     // (inside clap_plugin_gui_t::destroy and IPlugView::release)
     case WM_DESTROY:
@@ -2014,6 +2018,12 @@ void* cplug_createGUI(CplugHostContext* host_ctx, void* userPlugin)
     // In FL Studio, load a plugin, go to the setting in the window wrapper and toggle "DPI aware"
     // Bug to be aware of: https://anukari.com/blog/devlog/lions-tigers-and-high-dpi-oh-my
     pw->content_scale_factor = 1.0f;
+    // Fix for hosts such as Reason that are DPI-aware but do not pass
+    // content scaling commands to plugins
+    if (GetAwarenessFromDpiAwarenessContext(GetThreadDpiAwarenessContext()) !=
+        DPI_AWARENESS_UNAWARE)
+        pw->content_scale_factor =
+            (float)GetDpiForWindow(pw->hwnd) / USER_DEFAULT_SCREEN_DPI;
 
     // https://learn.microsoft.com/en-us/windows/win32/api/ole2/nf-ole2-oleinitialize
     // https://learn.microsoft.com/en-us/windows/win32/api/ole2/nf-ole2-registerdragdrop
@@ -2196,6 +2206,13 @@ void* cplug_createGUI(CplugHostContext* host_ctx, void* userPlugin)
 
     pw->gui = pw_create_gui(pw->plugin, pw);
     PW_ASSERT(pw->gui);
+
+    // See note about Reason above
+    if (pw->content_scale_factor != 1.0f)
+        cplug_setSize(
+            pw,
+            (uint32_t)(Info.init_size.width * pw->content_scale_factor + 0.5f),
+            (uint32_t)(Info.init_size.height * pw->content_scale_factor + 0.5f));
 
     return pw;
 }
